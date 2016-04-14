@@ -6,10 +6,16 @@
 // Depends
 var express = require("express");
 var bodyParser = require("body-parser");
+var redis = require("redis");
+
+// Ports
+var httpPort = 3000;
+var redisPort = 6379;
 
 // Intialize
 var app = express();
 var jsonParser = bodyParser.json();
+var redisClient = redis.createClient();
 
 // Data
 var wins = 0;
@@ -29,10 +35,12 @@ function cointoss(choice) {
 
 function tally(result) {
     if (result === "win") {
+        redisClient.incr("wins");
         ++wins;
         return "{ 'result': 'win' }";
     }
     else if (result === "lose") {
+        redisClient.incr("losses");
         ++losses;
         return "{ 'result': 'lose' }";
     }
@@ -41,11 +49,69 @@ function tally(result) {
     }
 }
 
-// Listen on port 3000
-var port = 3000;
-app.listen(port, function() {
-    console.log("Running node server on port", port);
+function callback(key, result) {
+    if (key === "wins") {
+        wins = result;
+    }
+    else if (key === "losses") {
+        losses = result;
+    }
+}
+
+function getValue(key) {
+    redisClient.get(key, function(err, result) {
+        if (err) {
+            throw err;
+        }
+        console.log(key, result);
+        callback(key, result);
+    });
+}
+
+function setValue(key, val) {
+    redisClient.set(key, val, function(err, result) {
+        if (err) {
+            throw err;
+        }
+        console.log(key, result);
+        callback(key, val);
+    });
+}
+
+function resetScore(key) {
+    redisClient.exists(key, function(err, result) {
+         if (err) {
+             console.log("Error:", key, "exists");
+         }
+         else if (!result) {
+             console.log("Set var in REDIS", key);
+             redisClient.set(key, 0);
+         }
+         else {
+             console.log("Load from REDIS", key);
+             if (key === "wins") {
+                 getValue("wins");
+             }
+             else if (key === "losses") {
+                 getValue("losses");
+             }
+         }
+    });
+}
+
+// Listen on httpPort 3000
+app.listen(httpPort, function() {
+    console.log("Running node server on port", httpPort);
 });
+
+// Redis
+redisClient.on("connect", function() {
+    console.log("Running redis server on port", redisPort);
+});
+
+// Load values
+resetScore("wins");
+resetScore("losses");
 
 // Handle POST request
 app.post("/flip", jsonParser, function (req, res) {
@@ -61,7 +127,18 @@ app.post("/flip", jsonParser, function (req, res) {
 
 // Handle GET request
 app.get("/stats", jsonParser, function (req, res) {
+    getValue("wins");
+    getValue("losses");
     console.log(wins, losses);
     result = "{ 'wins':" + wins + ", 'losses':" + losses + "}";
+    res.send(result.replace(/'/g, "\""));
+});
+
+// Handle DELETE request
+app.delete("/stats", jsonParser, function (req, res) {
+    setValue("wins", 0);
+    setValue("losses", 0);
+    console.log(wins, losses);
+    result = "{ 'wins':" + 0 + ", 'losses':" + 0 + "}";
     res.send(result.replace(/'/g, "\""));
 });
